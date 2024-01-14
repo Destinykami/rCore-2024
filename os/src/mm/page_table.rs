@@ -1,6 +1,6 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
-use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, PhysAddr};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -80,7 +80,9 @@ impl PageTable {
             frames: vec![frame],
         }
     }
-    /// Temporarily used to get arguments from user space.
+    /// Temporarily used to get arguments from user space. 
+    /// 手动查页表，仅有一个从传入的 satp token 中得到的多级页表根节点的物理页号，
+    /// 它的 frames 字段为空，也即不实际控制任何资源 (from_token 以及下面的translate)
     pub fn from_token(satp: usize) -> Self {
         Self {
             root_ppn: PhysPageNum::from(satp & ((1usize << 44) - 1)),
@@ -170,4 +172,22 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// ch4:从虚拟地址转换为物理地址
+pub fn virt_to_pyhs(token: usize,va: VirtAddr) -> PhysAddr{   
+    let pagetable = PageTable::from_token(token);//从token查页表项
+    let vpn = va.floor();  //获取虚拟地址所处的虚拟页的页号
+    //页表+虚拟页号->三级页表项(指向物理页的页表项)->物理页号->物理地址的前半部分
+    let mut pa: PhysAddr = pagetable.translate(vpn).unwrap().ppn().into(); 
+    pa.0 += va.page_offset();  //前半部分与页内偏移组合为完整物理地址
+    pa  
+}
+
+/// ch4: return a physical pointer in memory set of the pagetable token 
+pub fn translated_mut_ptr<T>(token: usize, ptr: *mut T) -> &'static mut T{
+    let ptr_va = VirtAddr::from(ptr as usize);
+    let ptr_pa = virt_to_pyhs(token, ptr_va);
+    ptr_pa.get_mut()
+    //get_mut 是个泛型函数，可以获取一个恰好放在一个物理页帧开头的类型为 T 的数据的可变引用。
 }

@@ -52,6 +52,7 @@ impl MemorySet {
         self.page_table.token()
     }
     /// Assume that no conflicts.
+    ///新增页框
     pub fn insert_framed_area(
         &mut self,
         start_va: VirtAddr,
@@ -62,6 +63,20 @@ impl MemorySet {
             MapArea::new(start_va, end_va, MapType::Framed, permission),
             None,
         );
+    }
+    /// ch4:删除页框
+    pub fn delete_frame_area(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+    ){
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil(); //虚拟地址转为虚拟页号
+        let map_area = self.areas.iter_mut().filter(|a| {
+            a.vpn_range.get_start() == start_vpn && a.vpn_range.get_end() == end_vpn
+        }).next().unwrap(); //使用迭代器和过滤器，遍历 self 中的区域（areas）集合，找到与指定虚拟地址范围匹配的区域
+
+        map_area.unmap(&mut self.page_table);
     }
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
