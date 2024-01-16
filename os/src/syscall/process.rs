@@ -1,14 +1,14 @@
 //! Process management syscalls
-use alloc::sync::Arc;
+use alloc::{sync::Arc};
 
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, PAGE_SIZE},
     loader::get_app_data_by_name,
     mm::{translated_refmut, translated_str},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus,
-    },
+    }, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -122,7 +122,13 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
         "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let us = get_time_us();
+    let p_ts = translated_refmut(current_user_token(), _ts);
+    *p_ts = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -137,21 +143,27 @@ pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
 }
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if start % PAGE_SIZE != 0 || port & !0x7 != 0 || port & 0x7 == 0 {
+        return -1;
+    }
+    current_task().unwrap().mmap(start, len, port)
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!(
         "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if start % PAGE_SIZE != 0 {
+        return -1;
+    }
+    current_task().unwrap().munmap(start, len)
 }
 
 /// change data segment size
@@ -166,19 +178,35 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
+pub fn sys_spawn(path: *const u8) -> isize {
     trace!(
         "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    let token=current_user_token();
+    let path=translated_str(token, path);
+    if let Some(data)=get_app_data_by_name(path.as_str()){
+        let current_task=current_task().unwrap();
+        let task=current_task.spawn(data);
+        let pid=task.getpid();
+        add_task(task);
+        pid as isize
+    }
+    else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
         "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio<=1{
+        return -1;
+    }
+    else{
+        current_task().unwrap().set_priority(prio)
+    }
 }
