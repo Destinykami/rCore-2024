@@ -3,7 +3,7 @@ use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::fs::{File, Stdin, Stdout};
-use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, self, MapPermission};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
@@ -71,6 +71,12 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    
+    /// stride调度
+    pub stride:usize,
+
+    /// 优先级
+    pub priority:usize,
 }
 
 impl TaskControlBlockInner {
@@ -135,6 +141,8 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    stride:0,
+                    priority:16,
                 })
             },
         };
@@ -216,6 +224,8 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    stride:0,
+                    priority:16,
                 })
             },
         });
@@ -260,6 +270,105 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+    ///mmap
+    pub fn mmap(&self,start: usize, len: usize, port: usize)->isize{
+        let mut inner=self.inner.exclusive_access();
+        let start_va=mm::VirtAddr::from(start);
+        let end_va=mm::VirtAddr::from(start+len);
+        //遍历了虚拟地址范围内的所有虚拟页
+        for vpn in mm::VPNRange::new(start_va.floor(),end_va.ceil()){
+            if let Some(pte) =  inner.memory_set.translate(vpn){
+                if pte.is_valid(){
+                    return -1;
+                }
+            }
+        }
+        let map_permission: mm::MapPermission = MapPermission::from_bits((port as u8) << 1).unwrap() | MapPermission::U;
+        inner.memory_set.insert_framed_area(start_va, end_va, map_permission);
+        //检查从起始地址到结束地址中是否有未被映射的内存
+        for vpn in mm::VPNRange::new(start_va.floor(),end_va.ceil()){
+            match inner.memory_set.translate(vpn) {
+                Some(pte)=>{
+                    if pte.is_valid()==false{
+                        return -1;
+                    }
+                }
+                None => {
+                    return -1;
+                }
+            }
+        }
+        0
+    }
+    ///ch4:munmap
+    pub fn munmap(&self,start:usize,len:usize)->isize{
+        let mut inner=self.inner.exclusive_access();
+        let start_va=mm::VirtAddr::from(start);
+        let end_va=mm::VirtAddr::from(start+len);
+        //检查从起始地址到结束地址中是否有未被映射的内存
+        for vpn in mm::VPNRange::new(start_va.floor(),end_va.ceil()){
+            match inner.memory_set.translate(vpn) {
+                Some(pte)=>{
+                    if pte.is_valid()==false{
+                        return -1;
+                    }
+                }
+                None => {
+                    return -1;
+                }
+            }
+        }
+        inner.memory_set.remove_area_with_start_vpn(mm::VirtPageNum::from(start_va));//按照虚页号删除
+        0
+    }
+    ///spawn
+    pub fn spawn(self:&Arc<TaskControlBlock>,elf_data: &[u8])->Arc<TaskControlBlock>{
+        let mut parent_inner=self.inner_exclusive_access();//父进程
+        let (memory_set,user_sp,entry_point)=MemorySet::from_elf(elf_data);
+        let trap_cx_ppn=memory_set.translate(VirtAddr::from(TRAP_CONTEXT_BASE).into()).unwrap().ppn();
+        let pid_handle=pid_alloc();//分配新的pid
+        let kernel_stack=kstack_alloc();//分配新的内核栈
+        let kernel_stack_top=kernel_stack.get_top();
+        let task_control_block=Arc::new(Self{
+            pid:pid_handle,
+            kernel_stack,
+            inner:unsafe{
+                UPSafeCell::new(TaskControlBlockInner { 
+                    trap_cx_ppn, 
+                    base_size: user_sp, 
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top), 
+                    task_status: TaskStatus::Ready, 
+                    memory_set, 
+                    parent: Some(Arc::downgrade(self)), 
+                    children: Vec::new(), 
+                    exit_code: 0, 
+                    heap_bottom: user_sp, 
+                    program_brk: user_sp, 
+                    fd_table: vec![
+                        // 0 -> stdin
+                        Some(Arc::new(Stdin)),
+                        // 1 -> stdout
+                        Some(Arc::new(Stdout)),
+                        // 2 -> stderr
+                        Some(Arc::new(Stdout)),
+                    ],
+                    stride:0,
+                    priority:16,
+                })
+            },
+        });
+        parent_inner.children.push(task_control_block.clone());
+        let trap_cx=task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx=TrapContext::app_init_context(entry_point, user_sp, KERNEL_SPACE.exclusive_access().token(),kernel_stack_top, trap_handler as usize);
+
+        task_control_block
+    }
+    /// 设置优先级
+    pub fn set_priority(&self, prio: isize)->isize{
+        let mut inner = self.inner_exclusive_access();
+        inner.priority = prio as usize;
+        inner.priority as isize
     }
 }
 

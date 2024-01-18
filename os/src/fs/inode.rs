@@ -73,7 +73,7 @@ pub fn list_apps() {
 bitflags! {
     ///  The flags argument to the open() system call is constructed by ORing together zero or more of the following values:
     pub struct OpenFlags: u32 {
-        /// readyonly
+        /// readonly
         const RDONLY = 0;
         /// writeonly
         const WRONLY = 1 << 0;
