@@ -183,4 +183,87 @@ impl Inode {
         });
         block_cache_sync_all();
     }
+    /// is a directory
+    pub fn is_dir(&self) -> bool{
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode|{
+            disk_inode.is_dir()
+        })
+    }
+    /// get inode id
+    pub fn inode_id(&self) -> u32{
+        let fs = self.fs.lock();
+        fs.get_inode_id(self.block_id,self.block_offset)
+    }
+
+    /// get number of link
+    pub fn linknum(&self,inode_id: u32) -> u32 {
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode|{
+            self.link_num(inode_id, disk_inode)
+        })
+    }
+
+    fn link_num(&self, inode_id: u32, disk_inode: &DiskInode) -> u32 {
+        // assert it is a directory
+        assert!(disk_inode.is_dir());
+
+        let mut link_num = 0u32;
+        let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+        let mut dirent = DirEntry::empty();
+        for i in 0..file_count {
+            assert_eq!(
+                disk_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                DIRENT_SZ,
+            );
+            if dirent.inode_id() == inode_id {
+                link_num += 1;
+            }
+        }
+        link_num
+    }
+    ///创建一个文件的一个硬链接
+    pub fn create_link(&self, old_name:&str,new_name:&str)->isize{
+        let mut fs=self.fs.lock();
+        self.modify_disk_inode(|root_inode| {
+            if let Some(old_inode_id)=self.find_inode_id(old_name, root_inode){
+                let file_count = (root_inode.size as usize) / DIRENT_SZ;
+                let new_size = (file_count + 1) * DIRENT_SZ;
+                // increase size
+                self.increase_size(new_size as u32, root_inode, &mut fs);
+                // write dirent
+                let dirent = DirEntry::new(new_name, old_inode_id);
+                root_inode.write_at(
+                    file_count * DIRENT_SZ,
+                    dirent.as_bytes(),
+                    &self.block_device,
+                );
+                0
+            }
+            else{
+                -1
+            }
+        })
+    }
+    ///取消一个文件路径到文件的链接
+    pub fn delete_link(&self,name:&str)->isize{
+        let mut _fs=self.fs.lock();
+        self.modify_disk_inode(|root_inode| {
+            assert!(root_inode.is_dir());
+            let file_count = (root_inode.size as usize) / DIRENT_SZ;
+            let mut dirent = DirEntry::empty();
+            for i in 0..file_count{
+                assert_eq!(
+                    root_inode.read_at(DIRENT_SZ * i, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.name()==name{
+                    let temp=DirEntry::empty();
+                    root_inode.write_at(DIRENT_SZ*i, temp.as_bytes(),&self.block_device);
+                    return 0;
+                }
+            }
+            -1
+        })
+    }
 }
