@@ -3,7 +3,7 @@
 mod inode;
 mod pipe;
 mod stdio;
-
+mod mailbox;
 use crate::mm::UserBuffer;
 
 /// trait File for all file types
@@ -50,3 +50,4 @@ bitflags! {
 pub use inode::{list_apps, open_file, OSInode, OpenFlags};
 pub use pipe::{make_pipe, Pipe};
 pub use stdio::{Stdin, Stdout};
+pub use mailbox::{Mail, MailBox, MailBoxInner, MailBoxStatus};

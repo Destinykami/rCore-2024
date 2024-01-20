@@ -1,7 +1,8 @@
 //! File and filesystem-related syscalls
-use crate::fs::{make_pipe, open_file, OpenFlags, Stat};
+use crate::fs::{make_pipe, open_file, OpenFlags, Stat,MailBoxStatus};
 use crate::mm::{translated_byte_buffer, translated_refmut, translated_str, UserBuffer};
-use crate::task::{current_task, current_user_token};
+use crate::task::{current_task, current_user_token, pid2task};
+use crate::config::{MAX_MAIL_LENGTH, MAX_MESSAGE_NUM};
 use alloc::sync::Arc;
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
@@ -121,5 +122,90 @@ pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
 /// YOUR JOB: Implement unlinkat.
 pub fn sys_unlinkat(_name: *const u8) -> isize {
     trace!("kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED", current_task().unwrap().pid.0);
+    -1
+}
+pub fn sys_mailread(buf: *mut u8, len: usize)->isize{
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    let token = inner.get_user_token();
+    let mut mailbox_inner = inner.mailbox.buffer.exclusive_access();
+    if len == 0 {
+        if mailbox_inner.is_empty(){
+            println!("Len=0, The MailBox is empty!");
+            return -1;
+        }
+        println!("Len=0, The MailBox is not empty!");
+        return 0;
+    }
+    if mailbox_inner.is_empty() {
+        println!("Can't Read, The MailBox is empty!");
+        return -1;
+    }
+    let mailbox_head = mailbox_inner.head; //当前队列头部
+    // the truncated mail length
+    let mlen = len.min(mailbox_inner.arr[mailbox_head].len);
+    let dst_vec = translated_byte_buffer(token, buf, mlen);
+    let src_ptr = mailbox_inner.arr[mailbox_head].data.as_ptr();
+
+    for (idx, dst) in dst_vec.into_iter().enumerate() {
+        unsafe {
+            dst.copy_from_slice(
+                core::slice::from_raw_parts(
+                    src_ptr.wrapping_add(idx) as *const u8,
+                    core::mem::size_of::<u8>() *mlen
+                    )
+            );
+        }
+    }
+    mailbox_inner.status = MailBoxStatus::Normal;
+    mailbox_inner.head = (mailbox_head + 1) % MAX_MAIL_LENGTH;
+    if mailbox_inner.head == mailbox_inner.tail {
+        mailbox_inner.status = MailBoxStatus::Empty;
+    }
+    println!("Read a mail");
+    mlen as isize
+}
+pub fn sys_mailwrite(pid:usize,buf: *mut u8, len: usize)->isize{
+    if core::ptr::null() == buf {
+        return -1;
+    }
+    if let Some(target_task) = pid2task(pid) {
+        let target_task_ref = target_task.inner_exclusive_access();
+        let token = target_task_ref.get_user_token();
+        let mut mailbox_inner = target_task_ref.mailbox.buffer.exclusive_access();
+        if len == 0 {
+            if mailbox_inner.is_full() {
+                println!("Len=0, The MailBox is full!");
+                return -1;
+            }
+            println!("Len=0, The MailBox is not full!");
+            return 0;
+        }
+        if mailbox_inner.is_full() {
+            return -1;
+        }
+        let mailbox_tail = mailbox_inner.tail;
+        mailbox_inner.status = MailBoxStatus::Normal;
+        // the truncated mail length
+        let mlen = len.min(MAX_MAIL_LENGTH);
+        // prepare source data
+        let src_vec: alloc::vec::Vec<&mut [u8]> = translated_byte_buffer(token, buf, mlen);
+        
+        //copy from source to dst
+        for (idx, src) in src_vec.into_iter().enumerate() {
+            let slice_length=src.len();
+            let destination=&mut mailbox_inner.arr[mailbox_tail].data[idx*slice_length..(idx+1)*slice_length];
+            destination.copy_from_slice(src);
+            
+        }
+        // store the mail length
+        mailbox_inner.arr[mailbox_tail].len = mlen;
+        mailbox_inner.tail = (mailbox_tail + 1) % MAX_MESSAGE_NUM;
+        if mailbox_inner.tail == mailbox_inner.head {
+            mailbox_inner.status = MailBoxStatus::Full;
+        }
+        println!("Write a mail");
+        return 0;
+    }
     -1
 }

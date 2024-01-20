@@ -25,3 +25,7 @@ pub const CLOCK_FREQ: usize = 12500000;
 pub const MEMORY_END: usize = 0x88000000;
 /// The base address of control registers in Virtio_Block device
 pub const MMIO: &[(usize, usize)] = &[(0x10001000, 0x1000)];
+/// 邮箱中的最大报文数
+pub const MAX_MESSAGE_NUM: usize = 16;
+/// 每条报文的最大长度
+pub const MAX_MAIL_LENGTH: usize = 256;

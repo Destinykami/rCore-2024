@@ -3,7 +3,7 @@
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle, SignalActions, SignalFlags, TaskContext};
 use crate::{
     config::TRAP_CONTEXT_BASE,
-    fs::{File, Stdin, Stdout},
+    fs::{File, Stdin, Stdout, MailBox},
     mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE},
     sync::UPSafeCell,
     trap::{trap_handler, TrapContext},
@@ -87,6 +87,8 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    ///mailbox
+    pub mailbox:MailBox,
 }
 
 impl TaskControlBlockInner {
@@ -158,6 +160,7 @@ impl TaskControlBlock {
                     trap_ctx_backup: None,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    mailbox:MailBox::new(),
                 })
             },
         };
@@ -273,6 +276,7 @@ impl TaskControlBlock {
                     trap_ctx_backup: None,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    mailbox:MailBox::new(),
                 })
             },
         });
