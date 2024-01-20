@@ -1,6 +1,5 @@
 .*/*
 !.github/*
-!.vscode/settings.json
 .idea
 Cargo.lock
 target
@@ -15,5 +14,4 @@ easy-fs-fuse/target/*
 tools/
 pushall.sh
 *.bak
-
 user/*
